@@ -1,6 +1,1 @@
-fastapi
-uvicorn
-pydantic
-numpy
-scikit-learn
-pandas
+opencv-python
