@@ -53,15 +53,15 @@ class ReconocimientoFacial:
             landmarks = []
             cara = resultado.multi_face_landmarks[0]  # Primera cara
             
-            # Extraer puntos clave importantes (ojos, nariz, boca, contorno)
-            indices_importantes = list(range(0, 468, 7))  # Cada 7 puntos
+            # Extraer TODOS los landmarks (468 puntos) para mejor precisión
+            for lm in cara.landmark:
+                landmarks.extend([lm.x, lm.y, lm.z])
             
-            for idx in indices_importantes:
-                if idx < len(cara.landmark):
-                    lm = cara.landmark[idx]
-                    landmarks.extend([lm.x, lm.y, lm.z])
+            # Normalizar características
+            landmarks = np.array(landmarks)
+            landmarks = (landmarks - landmarks.mean()) / (landmarks.std() + 1e-6)
             
-            return np.array(landmarks)
+            return landmarks
         
         except Exception as e:
             print(f"Error al extraer características: {e}")
@@ -72,18 +72,22 @@ class ReconocimientoFacial:
         if cara1 is None or cara2 is None:
             return 0.0
         
-        # Normalizar longitud
-        min_len = min(len(cara1), len(cara2))
-        cara1 = cara1[:min_len]
-        cara2 = cara2[:min_len]
-        
-        # Calcular similitud (inverso de la distancia)
-        distancia = np.linalg.norm(cara1 - cara2)
-        similitud = 1 / (1 + distancia * 10)  # Ajuste de escala
-        
-        return similitud
+        try:
+            # Normalizar longitud
+            min_len = min(len(cara1), len(cara2))
+            cara1 = cara1[:min_len]
+            cara2 = cara2[:min_len]
+            
+            # Calcular similitud con distancia euclidiana
+            distancia = np.linalg.norm(cara1 - cara2)
+            # Escala ajustada: distancia pequeña = similitud alta
+            similitud = np.exp(-distancia / 2)  # Distribución gaussiana
+            
+            return float(similitud)
+        except:
+            return 0.0
     
-    def cargar_caras_conocidas(self, carpeta="caras_conocidas"):
+    def cargar_caras_conocidas(self, carpeta="known_faces"):
         """Carga las fotos de personas conocidas"""
         print(f"\n{'='*50}")
         print("CARGANDO CARAS CONOCIDAS")
@@ -103,7 +107,8 @@ class ReconocimientoFacial:
             except Exception as e:
                 print(f"⚠ Error al cargar archivo: {e}")
                 print("Generando nuevos encodings...\n")
-        
+        else:
+            print("test")
         # Crear carpeta si no existe
         ruta_carpeta = Path(carpeta)
         if not ruta_carpeta.exists():
@@ -191,8 +196,8 @@ class ReconocimientoFacial:
                     mejor_similitud = similitud
                     mejor_coincidencia = nombre
         
-        # Umbral mínimo de confianza
-        if mejor_similitud < 0.70:
+        # Umbral mínimo de confianza (reducido para mejor detección)
+        if mejor_similitud < 0.50:
             return "Desconocido", mejor_similitud
         
         return mejor_coincidencia, mejor_similitud
@@ -219,10 +224,13 @@ class ReconocimientoFacial:
         print("✓ Webcam activa\n")
         
         frame_count = 0
+        detecciones_cache = []  # Guardar detecciones anteriores
+        nombre_cache = "Desconocido"
+        confianza_cache = 0.0
         
         with self.mp_face_detection.FaceDetection(
             model_selection=1,
-            min_detection_confidence=0.6
+            min_detection_confidence=0.5
         ) as detector:
             
             while True:
@@ -232,44 +240,45 @@ class ReconocimientoFacial:
                     break
                 
                 frame_count += 1
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                resultados = detector.process(rgb)
                 
-                # Procesar cada 3 frames para mejor rendimiento
-                if frame_count % 3 == 0:
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    resultados = detector.process(rgb)
+                # Actualizar detecciones cada frame
+                if resultados.detections:
+                    detecciones_cache = resultados.detections
+                
+                # Dibujar TODAS las detecciones (suaviza el titeleo)
+                for deteccion in detecciones_cache:
+                    bbox = deteccion.location_data.relative_bounding_box
+                    h, w, _ = frame.shape
                     
-                    if resultados.detections:
-                        for deteccion in resultados.detections:
-                            # Obtener coordenadas
-                            bbox = deteccion.location_data.relative_bounding_box
-                            h, w, _ = frame.shape
-                            
-                            x = int(bbox.xmin * w)
-                            y = int(bbox.ymin * h)
-                            ancho = int(bbox.width * w)
-                            alto = int(bbox.height * h)
-                            
-                            # Extraer región de la cara
-                            x1, y1 = max(0, x), max(0, y)
-                            x2, y2 = min(w, x + ancho), min(h, y + alto)
-                            cara_roi = frame[y1:y2, x1:x2]
-                            
-                            if cara_roi.size > 0:
-                                # Reconocer
-                                encoding = self.extraer_caracteristicas(cara_roi)
-                                nombre, confianza = self.reconocer_cara(encoding)
-                                
-                                # Dibujar
-                                color = (0, 255, 0) if nombre != "Desconocido" else (0, 0, 255)
-                                cv2.rectangle(frame, (x, y), (x + ancho, y + alto), color, 2)
-                                
-                                # Etiqueta
-                                etiqueta = f"{nombre} ({confianza*100:.0f}%)"
-                                tam_texto = cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-                                
-                                cv2.rectangle(frame, (x, y - 35), (x + tam_texto[0] + 10, y), color, -1)
-                                cv2.putText(frame, etiqueta, (x + 5, y - 10),
-                                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    x = int(bbox.xmin * w)
+                    y = int(bbox.ymin * h)
+                    ancho = int(bbox.width * w)
+                    alto = int(bbox.height * h)
+                    
+                    # Extraer región de la cara
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(w, x + ancho), min(h, y + alto)
+                    cara_roi = frame[y1:y2, x1:x2]
+                    
+                    if cara_roi.size > 0:
+                        # Procesar reconocimiento cada 3 frames (optimización)
+                        if frame_count % 3 == 0:
+                            encoding = self.extraer_caracteristicas(cara_roi)
+                            nombre_cache, confianza_cache = self.reconocer_cara(encoding)
+                        
+                        # Dibujar siempre con último resultado (sin titeleo)
+                        color = (0, 255, 0) if nombre_cache != "Desconocido" else (0, 0, 255)
+                        cv2.rectangle(frame, (x, y), (x + ancho, y + alto), color, 2)
+                        
+                        # Etiqueta
+                        etiqueta = f"{nombre_cache} ({confianza_cache*100:.0f}%)"
+                        tam_texto = cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                        
+                        cv2.rectangle(frame, (x, y - 35), (x + tam_texto[0] + 10, y), color, -1)
+                        cv2.putText(frame, etiqueta, (x + 5, y - 10),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
                 # Instrucciones en pantalla
                 cv2.putText(frame, "Presiona 'q' para salir", (10, 30),
@@ -368,7 +377,7 @@ def main():
     sistema = ReconocimientoFacial()
     
     # Cargar caras conocidas
-    sistema.cargar_caras_conocidas("caras_conocidas")
+    sistema.cargar_caras_conocidas("known_faces")
     
     if not sistema.caras_conocidas:
         print("\n⚠ ATENCIÓN: No hay caras conocidas cargadas")
@@ -401,7 +410,7 @@ def main():
             sistema.analizar_imagen(ruta)
         
         elif opcion == "3":
-            sistema.cargar_caras_conocidas("caras_conocidas")
+            sistema.cargar_caras_conocidas("known_faces")
         
         elif opcion == "4":
             print("\n👋 ¡Hasta luego!")
