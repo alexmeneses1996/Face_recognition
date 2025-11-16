@@ -40,55 +40,33 @@ class ReconocimientoFacial:
         
         print("✓ Sistema de reconocimiento facial inicializado")
     
-    
-    def extraer_caracteristicas(self, imagen, bbox=None):
-        """Extrae características faciales consistentes usando la imagen completa."""
-
+    def extraer_caracteristicas(self, imagen):
+        """Extrae características faciales únicas de una imagen"""
         try:
-            # 1. FaceMesh SIEMPRE SOBRE LA IMAGEN COMPLETA
             rgb = cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB)
             resultado = self.face_mesh.process(rgb)
-
+            
             if not resultado.multi_face_landmarks:
                 return None
-
-            cara = resultado.multi_face_landmarks[0]
-
-            # 2. Si no hay bbox (cuando se entrena), sacar uno aproximado
-            if bbox is None:
-                xs = [lm.x for lm in cara.landmark]
-                ys = [lm.y for lm in cara.landmark]
-                x_min, x_max = min(xs), max(xs)
-                y_min, y_max = min(ys), max(ys)
-            else:
-                # bbox viene en píxeles → lo convertimos a coordenadas 0-1
-                h, w, _ = imagen.shape
-                x_min = bbox.xmin
-                y_min = bbox.ymin
-                x_max = bbox.xmin + bbox.width
-                y_max = bbox.ymin + bbox.height
-
-            # 3. Normalizar landmarks respecto a la cara detectada
+            
+            # Usar landmarks clave como características
             landmarks = []
+            cara = resultado.multi_face_landmarks[0]  # Primera cara
+            
+            # Extraer TODOS los landmarks (468 puntos) para mejor precisión
             for lm in cara.landmark:
-                nx = (lm.x - x_min) / (x_max - x_min + 1e-6)
-                ny = (lm.y - y_min) / (y_max - y_min + 1e-6)
-                nz = lm.z
-                landmarks.extend([nx, ny, nz])
-
-            # 4. Vector como numpy + normalización final
+                landmarks.extend([lm.x, lm.y, lm.z])
+            
+            # Normalizar características
             landmarks = np.array(landmarks)
-            #landmarks = (landmarks - landmarks.mean()) / (landmarks.std() + 1e-6)
-            landmarks = (landmarks - np.min(landmarks)) / (np.max(landmarks) - np.min(landmarks) + 1e-6)
-
-
+            landmarks = (landmarks - landmarks.mean()) / (landmarks.std() + 1e-6)
+            
             return landmarks
-
+        
         except Exception as e:
-            print("Error en extraer_caracteristicas:", e)
+            print(f"Error al extraer características: {e}")
             return None
-
-
+    
     def calcular_similitud(self, cara1, cara2):
         """Calcula qué tan parecidas son dos caras (0-1)"""
         if cara1 is None or cara2 is None:
@@ -114,8 +92,6 @@ class ReconocimientoFacial:
         print(f"\n{'='*50}")
         print("CARGANDO CARAS CONOCIDAS")
         print(f"{'='*50}")
-
-        self.caras_conocidas = {}
         
         # Intentar cargar desde archivo guardado
         if os.path.exists(self.archivo_encodings):
@@ -228,7 +204,6 @@ class ReconocimientoFacial:
         
         return mejor_coincidencia, mejor_similitud
     
-
     def webcam_tiempo_real(self):
         """Reconocimiento facial desde la webcam"""
         print("\n" + "="*50)
